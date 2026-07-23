@@ -43,7 +43,7 @@ class LoginWindow(QWidget):
         layout.addWidget(self.password_input)
 
 
-        self.login_btn = QPushButton("Giriş Yap")
+        self.login_btn = QPushButton("Login")
         self.login_btn.setStyleSheet("""
             QPushButton { background-color: #2980b9; color: white; padding: 10px; font-size: 14px; font-weight: bold; border: none; border-radius: 4px; }
             QPushButton:hover { background-color: #3498db; }
@@ -61,7 +61,7 @@ class LoginWindow(QWidget):
 
         # Giriş Validasyonu
         if not username or not password:
-            QMessageBox.warning(self, "Hata", "Lütfen tüm alanları doldurun!")
+            QMessageBox.warning(self, "Error", "Please Fill All fields!")
             return
 
         url = self.baseurl
