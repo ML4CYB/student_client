@@ -18,7 +18,7 @@ class JetstreamClient(QMainWindow):
 
         self.inactivity_timer = QTimer(self)
         self.inactivity_timer.timeout.connect(self.close_machine)
-        self.timer_duration = 5 * 60 * 1000  # 5 dakika
+        self.timer_duration = 15 * 60 * 1000  # 5 dakika
         self.inactivity_timer.start(self.timer_duration)
 
 
