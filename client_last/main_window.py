@@ -125,6 +125,7 @@ class MainWindow(QMainWindow):
             self._polling_dialog = QMessageBox(self)
             self._polling_dialog.setWindowTitle("Preparing Server")
             self._polling_dialog.setText("Preparing Server, Please Wait...")
+            self._polling_dialog.setStandardButtons(QMessageBox.StandardButton.NoButton)
             #self._polling_dialog.setStandardButtons(QMessageBox.StandardButton.Cancel)
             #self._polling_dialog.buttonClicked.connect(self._cancel_polling)
             self._polling_dialog.show()
@@ -180,8 +181,9 @@ class MainWindow(QMainWindow):
 
     def _stop_polling_dialog(self):
         """Polling dialog'unu kapat."""
-        if hasattr(self, '_polling_dialog') and self._polling_dialog:
-            self._polling_dialog.close()
+        if hasattr(self, '_polling_dialog') and self._polling_dialog:                   
+            self._polling_dialog.hide()
+            self._polling_dialog.destroy()
             self._polling_dialog = None
 
     def handle_ssh(self, server_info):
