@@ -95,8 +95,9 @@ class JetstreamClient(QMainWindow):
         self.esc_shortcut.activated.connect(self.handle_escape_shortcut)
 
         self.drag_position = None
-        self.installEventFilter(self)
-        self.browser.installEventFilter(self)
+        #self.installEventFilter(self)
+        #self.browser.installEventFilter(self)
+        QApplication.instance().installEventFilter(self)
 
 
     def mousePressEvent(self, event):
