@@ -1,0 +1,218 @@
+
+import sys
+import requests
+import uuid
+
+
+from PyQt6 import sip
+from PyQt6.QtCore import Qt ,QTimer
+from PyQt6.QtWidgets import (
+    QApplication, QWidget, QMainWindow, QVBoxLayout, 
+    QHBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox,QTableWidget, QTableWidgetItem ,QHeaderView
+)
+from vnc import JetstreamClient, REQUEST_TIMEOUT
+from client_log import log, api_post
+
+
+class MainWindow(QMainWindow):
+    def __init__(self, token,baseurl,password):
+        super().__init__()
+        self.token = token  
+        self.setWindowTitle("Jetstream Panel")
+        self.resize(600, 500) 
+        self.baseurl = baseurl
+        self.password = password
+        self.vnc = None              # acik Desktop/SSH penceresi (en fazla bir tane)
+        self._polling_dialog = None  # sunucu hazirlanirken gosterilen "Preparing Server" kutusu
+
+        central_widget = QWidget()
+        self.main_layout = QVBoxLayout(central_widget)
+        
+        welcome_label = QLabel("Welcome to Jetstream Client!")
+        welcome_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #2c3e50;")
+        welcome_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.main_layout.addWidget(welcome_label)
+        
+        self.table = QTableWidget()
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(["Server Name", "OS ID", "Status", "Connect"])
+        
+
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch) 
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        
+        self.main_layout.addWidget(self.table)
+        self.setCentralWidget(central_widget)
+        self.load_servers()
+
+    def load_servers(self):
+        url = self.baseurl + "/server/list" 
+        payload = {"token": self.token}
+
+
+        try:
+
+            data = api_post(url, payload, REQUEST_TIMEOUT)
+            server_list = data.get("result")            
+            self.table.setRowCount(len(server_list))
+            
+            for row_idx, server in enumerate(server_list):
+                self.table.setItem(row_idx, 0, QTableWidgetItem(server["server_name"]))
+                self.table.setItem(row_idx, 1, QTableWidgetItem(server["os_id"]))
+
+                staturl = self.baseurl + "/server/status"
+                payload = {"token": self.token, "server_id": server["os_id"]}
+                statdata = api_post(staturl, payload, REQUEST_TIMEOUT)
+                status = statdata.get("server_status", "UNKNOWN")
+                self.table.setItem(row_idx, 2, QTableWidgetItem(status))
+                
+                button_widget = QWidget()
+                button_layout = QHBoxLayout(button_widget)
+                button_layout.setContentsMargins(5, 2, 5, 2) 
+                button_layout.setSpacing(5)
+                
+                btn_desktop = QPushButton("Desktop")
+                btn_desktop.setStyleSheet("background-color: #3498db; color: white; font-weight: bold; padding: 4px 8px;")
+                btn_desktop.clicked.connect(lambda checked, s=server: self.handle_desktop(s,open=False,desktop=True))
+                
+                btn_ssh = QPushButton("SSH")
+                btn_ssh.setStyleSheet("background-color: #2ecc71; color: white; font-weight: bold; padding: 4px 8px;")
+                btn_ssh.clicked.connect(lambda checked, s=server: self.handle_ssh(s))
+                
+                button_layout.addWidget(btn_desktop)
+                button_layout.addWidget(btn_ssh)
+                self.table.setCellWidget(row_idx, 3, button_widget)
+
+                self.table.resizeColumnsToContents()
+                
+        except Exception as e:
+            print(f"Error : {e}")
+            log.warning("loading the server list failed: %s: %s", type(e).__name__, str(e)[:200])
+
+    def _has_open_session(self):
+        """Kapatilmamis bir Desktop/SSH penceresi var mi?"""
+        return (self.vnc is not None
+                and not sip.isdeleted(self.vnc)
+                and self.vnc.isVisible())
+
+    def handle_desktop(self, server_info,open=False,desktop=False):
+        log.info("handle_desktop: %s server=%s (%s) type=%s",
+                 "continuing after the server became ready" if open else "USER CLICK",
+                 server_info.get("os_id"), server_info.get("server_name"), "desktop" if desktop else "ssh")
+        if not open:
+            # open=True sunucu hazirlandiktan sonra otomatik gelen devam cagrisidir;
+            # open=False ise kullanicinin yeni bir tiklamasidir. Yeni tiklamada:
+            # acik pencere varsa ikincisini acma. Yoksa eski pencere closeEvent
+            # (set_passive) calismadan yok olur ve oturum active=1 kalir.
+            if self._has_open_session():
+                log.info("click blocked: a session window is already open")
+                QMessageBox.information(self, "Session Already Open",
+                    "You already have an open session.\nPlease close it before opening another one.")
+                return
+            # Sunucu hazirlanirken ikinci tiklama da ayni sorunu ve cift polling'i dogurur.
+            if self._polling_dialog is not None:
+                log.info("click blocked: a server is already being prepared")
+                QMessageBox.information(self, "Server Is Being Prepared",
+                    "A server is already being prepared.\nPlease wait until it is ready.")
+                return
+        url = self.baseurl + "/server/open"
+        if desktop : 
+            my_type = "desktop"
+        else  :
+            my_type = "ssh"
+        if open :
+            reg_id = self.server_login_list
+            payload = {"token":self.token , "server_id":server_info["os_id"],"reg_id": reg_id ,"reconnect" :1,"password":self.password,"guac" : server_info["guac"], "type" : my_type}
+        else : 
+            reg_id = server_info["id"]
+            payload = {"token":self.token , "server_id":server_info["os_id"],"reg_id": reg_id,"password":self.password ,"guac" : server_info["guac"], "type" : my_type}
+        data = api_post(url, payload, REQUEST_TIMEOUT)
+        status = data.get("status",None)
+        self.server_login_list = data.get("log_reg_id",None);
+        vncurl = data.get("url",None)
+        if status != 1 :
+            log.warning("could not get the session url (status=%s): showing 'Could not get url'", status)
+            QMessageBox.information(self, "Error", "Could not get url")
+        else :
+            if not vncurl:
+                log.info("server is not ready yet (login_id=%s): waiting for it", self.server_login_list)
+                self._start_server_polling(server_info,desktop)
+            else :
+                log.info("opening the session window (login_id=%s)", self.server_login_list)
+                self.vnc = JetstreamClient(vncurl,server_info,self.token,self.baseurl,self.server_login_list)
+                self.vnc.show()
+
+
+
+    def _start_server_polling(self, server_info,desktop=False):
+        """Sunucu hazır olana kadar her 5 saniyede bir /server/status adresini kontrol eder."""
+        # Kullanıcıya bilgi ver
+        if not hasattr(self, '_polling_dialog') or self._polling_dialog is None:
+            self._polling_dialog = QMessageBox(self)
+            self._polling_dialog.setWindowTitle("Preparing Server")
+            self._polling_dialog.setText("Preparing Server, Please Wait...")
+            self._polling_dialog.setStandardButtons(QMessageBox.StandardButton.NoButton)
+            #self._polling_dialog.setStandardButtons(QMessageBox.StandardButton.Cancel)
+            #self._polling_dialog.buttonClicked.connect(self._cancel_polling)
+            self._polling_dialog.show()
+
+
+        self._polling_timer = QTimer(self)
+        self._polling_timer.setSingleShot(True)
+        self._polling_timer.timeout.connect(lambda: self._check_server_status(server_info,desktop))
+        self._polling_timer.start(5000)  
+
+    def _check_server_status(self, server_info,desktop=False):
+
+        try:
+            url = self.baseurl + "/server/status"
+            payload = {"token": self.token, "server_id": server_info["os_id"]}
+            data = api_post(url, payload, REQUEST_TIMEOUT)
+            status = data.get("status", None)
+            if status == 1:
+                if server_info["guac"] == 1:
+                    is_guac_ready  = data.get("guac",False)
+                    if is_guac_ready : 
+                        self._stop_polling_dialog()
+                        self.handle_desktop(server_info,open=True,desktop = desktop)  # Kendini çağır
+                    else:
+
+                        self._polling_timer = QTimer(self)
+                        self._polling_timer.setSingleShot(True)
+                        self._polling_timer.timeout.connect(lambda: self._check_server_status(server_info,desktop))
+                        self._polling_timer.start(5000)
+                else: 
+                    self._stop_polling_dialog()
+                    self.handle_desktop(server_info,open=True,desktop=desktop)  # Kendini çağır
+            else:
+
+                self._polling_timer = QTimer(self)
+                self._polling_timer.setSingleShot(True)
+                self._polling_timer.timeout.connect(lambda: self._check_server_status(server_info,desktop))
+                self._polling_timer.start(5000)
+
+        except Exception as e:
+
+            self._polling_timer = QTimer(self)
+            self._polling_timer.setSingleShot(True)
+            self._polling_timer.timeout.connect(lambda: self._check_server_status(server_info,desktop))
+            self._polling_timer.start(5000)
+
+    def _cancel_polling(self, button):
+        if hasattr(self, '_polling_timer') and self._polling_timer:
+            self._polling_timer.stop()
+            self._polling_timer = None
+        self._stop_polling_dialog()
+
+    def _stop_polling_dialog(self):
+        """Polling dialog'unu kapat."""
+        if hasattr(self, '_polling_dialog') and self._polling_dialog:                   
+            self._polling_dialog.hide()
+            self._polling_dialog.destroy()
+            self._polling_dialog = None
+
+    def handle_ssh(self, server_info):
+        self.handle_desktop(server_info,open=False,desktop=False)
